@@ -1,0 +1,28 @@
+ARG base_tag=3.1.4-alpine3.10
+FROM mcr.microsoft.com/dotnet/core/runtime:${base_tag}
+
+ARG EXE_DIR=.
+
+ARG ARG_IOTHUB_HOST
+ARG ARG_IOTHUB_OWNER_SHARED_ACCESS_KEY
+ARG ARG_EDGEHUB_HOST
+ARG ARG_EDGE_DEVICE_ID
+ARG ARG_LEAF_DEVICE_ID_PREFIX
+ENV ENV_IOTHUB_HOST=$ARG_IOTHUB_HOST
+ENV ENV_IOTHUB_OWNER_SHARED_ACCESS_KEY=$ARG_IOTHUB_OWNER_SHARED_ACCESS_KEY
+ENV ENV_EDGEHUB_HOST=$ARG_EDGEHUB_HOST
+ENV ENV_EDGE_DEVICE_ID=$ARG_EDGEHUB_HOST
+ENV ENV_LEAF_DEVICE_ID_PREFIX=$ARG_EDGEHUB_HOST
+
+ENV MODULE_NAME "DeviceApp.dll"
+
+WORKDIR /app
+
+COPY $EXE_DIR/ ./
+
+# Add an unprivileged user account for running the module
+RUN adduser -Ds /bin/sh moduleuser 
+USER moduleuser
+
+CMD echo "$(date --utc +"[%Y-%m-%d %H:%M:%S %:z]"): Starting Module" && \
+    exec /usr/bin/dotnet DeviceApp.dll
