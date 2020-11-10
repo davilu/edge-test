@@ -15,6 +15,7 @@ docker build^
  --build-arg ARG_EDGEHUB_HOST=[YOUR_EDGE_HUB_HOST]^
  --build-arg ARG_EDGE_DEVICE_ID=[YOUR_EDGE_HUB_DEVICE_ID]^
  --build-arg ARG_LEAF_DEVICE_ID_PREFIX=[YOUR_LEAF_DEVICE_ID_PREFIX]^
+ --build-arg ARG_DEBUG_LOG_ON=ON^
  -t [YOUR_CONTAINER_URL]/[YOUR_IMAGE_NAME]^
  -f publish/docker/linux/amd64/Dockerfile^
  --no-cache^

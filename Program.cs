@@ -20,13 +20,18 @@ namespace WeatherStation_Console
     {
         private const string MethodName = "test-method";
         private const int ChildCount = 5;
+        private const string PropertyName = "Name";
+        private const string PropertyValue = "Value";
+
         private static readonly string IotHubHost = Environment.GetEnvironmentVariable("ENV_IOTHUB_HOST");
         private static readonly string IotHubOwnerSharedAccessKey = Environment.GetEnvironmentVariable("ENV_IOTHUB_OWNER_SHARED_ACCESS_KEY");
         private static readonly string EdgeHubHost = Environment.GetEnvironmentVariable("ENV_EDGEHUB_HOST");
         private static readonly string EdgeDeviceId = Environment.GetEnvironmentVariable("ENV_EDGE_DEVICE_ID");
         private static readonly string LeafDeviceIdPrefix = Environment.GetEnvironmentVariable("ENV_LEAF_DEVICE_ID_PREFIX");
+        private static readonly bool DebugLogOn = Environment.GetEnvironmentVariable("ENV_DEBUG_LOG_ON") == "ON";
 
-
+        private static readonly Dictionary<string, int> D2COperationCounts = new Dictionary<string, int>();
+        private static readonly Dictionary<string, int> C2DOperationCounts = new Dictionary<string, int>();
         private static readonly TimeSpan OperationTimeOut = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan TestPeriod = TimeSpan.FromHours(72); 
         private static readonly TimeSpan TestFrequency = TimeSpan.FromSeconds(30);
@@ -36,7 +41,7 @@ namespace WeatherStation_Console
         public static async Task Main(string[] _)
         {
             DeviceApp d = new DeviceApp();
-            Console.WriteLine($"{DateTime.Now}: GatewayHost={EdgeHubHost}, ParentEdgeDeviceId={EdgeDeviceId}, LeafDevicePrefix={LeafDeviceIdPrefix}.");
+            LogInfo($"GatewayHost={EdgeHubHost}, ParentEdgeDeviceId={EdgeDeviceId}, LeafDevicePrefix={LeafDeviceIdPrefix}.");
             await d.RunAsync();
         }
 
@@ -69,7 +74,9 @@ namespace WeatherStation_Console
         private static async Task<DeviceClient> CreateDeviceClientAsync(Device device)
         {
             var deviceId = device.Id;
-            Console.WriteLine($"{DateTime.Now}: Device {device.Id} started");
+            D2COperationCounts[deviceId] = 0;
+            C2DOperationCounts[deviceId] = 0;
+            LogInfo($"Device {device.Id} started");
             var tokenRefresher = new DeviceAuthenticationWithSharedAccessKey(IotHubHost, device.Id, device.Authentication.SymmetricKey.PrimaryKey, TokenTTL);
             ITransportSettings transportSetting;
             if (deviceId.GetHashCode()%2 == 0)
@@ -87,14 +94,14 @@ namespace WeatherStation_Console
                 };
             }
 
-            Console.WriteLine($"TransportType of {deviceId}: {transportSetting.GetTransportType()}.");
+            LogInfo($"Device {device.Id} transportType: {transportSetting.GetTransportType()}.");
 
             var deviceClient = DeviceClient.Create(IotHubHost, EdgeHubHost, tokenRefresher, new ITransportSettings[] { transportSetting });
             deviceClient.SetConnectionStatusChangesHandler((state, reason) => 
-                { Console.WriteLine($"{deviceId} Connection state change: state={state}, reason={reason}"); });
+                { LogInfo($"Device {device.Id} Connection state change: state={state}, reason={reason}"); });
             await deviceClient.SetDesiredPropertyUpdateCallbackAsync((desiredProperties, context) =>
-                { 
-                    Console.WriteLine($"{deviceId} Desired properties change: desiredProperties={desiredProperties.ToJson()}");
+                {
+                    LogInfo($"Device {device.Id} Desired properties change: desiredProperties={desiredProperties.ToJson()}");
                     return Task.CompletedTask;
                 }, 
                 deviceClient);
@@ -113,25 +120,63 @@ namespace WeatherStation_Console
         {
             while (!token.IsCancellationRequested)
             {
-                var name = $"Random name: {Guid.NewGuid()}";
-                var value = $"Random value: {Guid.NewGuid()}";
-                var reportedProperties = new TwinCollection();
-                reportedProperties["Name"] = name;
-                reportedProperties["Value"] = value;
-                await deviceClient.UpdateReportedPropertiesAsync(reportedProperties);
-                Console.WriteLine($"{DateTime.Now} Device:{deviceId} > Update reported properties from {deviceId}: Name={name}, Value={value}");
+                var index = D2COperationCounts[deviceId];
+                var identity = $"[Device={deviceId}, Index={index}, Direction=D2C]";
+                LogDebug($"{identity}: Enter D2C loop...");
 
-                var messageString = $"Random Telemetry: {Guid.NewGuid()}";
-                var message = new D2CMessage(Encoding.UTF8.GetBytes(messageString))
+                var operationName = "UpdatReportedProperties";
+                try
                 {
-                    ContentEncoding = "utf-8",
-                    ContentType = "application/json"
-                };
-                message.Properties.Add("MachineName", deviceId);
+                    var name = $"Name: {identity}";
+                    var value = $"Value: {identity}";
+                    var reportedProperties = new TwinCollection();
+                    reportedProperties[PropertyName] = name;
+                    reportedProperties[PropertyValue] = value;
+                
+                    await deviceClient.UpdateReportedPropertiesAsync(reportedProperties);
+                    LogDebug($"{identity}: Updated reported properties successfully.");
 
-                await deviceClient.SendEventAsync(message);
-                Console.WriteLine($"{DateTime.Now} Device:{deviceId} > Sent message successfully from {deviceId}: {messageString}");
-                await Task.Delay(TestFrequency);
+                    operationName = "GetTwin";
+                    var twin = await deviceClient.GetTwinAsync();
+                    var retrievedName = twin.Properties.Reported[PropertyName];
+                    var retrievedValue = twin.Properties.Reported[PropertyValue];
+
+                    if (retrievedName == name && retrievedValue == value)
+                    {
+                        LogDebug($"{identity}: Get twin successfully.");
+                    }
+                    else
+                    {
+                        LogInfo($"{identity}: Get twin failed, expected ({PropertyName}, {PropertyValue})=({name}, {value}) but was ({retrievedName}, {retrievedValue}).");
+                    }
+
+                    operationName = "SendTelemetryMessage";
+                    var messagePayload = $"Telemetry: {identity}";
+                    var message = new D2CMessage(Encoding.UTF8.GetBytes(messagePayload))
+                    {
+                        ContentEncoding = "utf-8",
+                        ContentType = "application/json"
+                    };
+                    message.Properties.Add("MachineName", deviceId);
+
+                    await deviceClient.SendEventAsync(message);
+                    LogDebug($"{identity}: Sent message successfully.");
+                }
+                catch (Exception ex)
+                {
+                    LogInfo($"{identity}: Operation {operationName} failed: {ex}");
+                }
+                finally
+                {
+                    if ((index + 1) % 100 == 0)
+                    {
+                        LogInfo($"{identity}: finished {index + 1} D2C loop.");
+                    }
+
+                    D2COperationCounts[deviceId] = index + 1;
+                    LogDebug($"{identity}: Exit D2C loop.");
+                    await Task.Delay(TestFrequency);
+                }
             }
         }
 
@@ -139,36 +184,93 @@ namespace WeatherStation_Console
         {
             while (!token.IsCancellationRequested)
             {
-                var messageString = $"Random C2D message: {Guid.NewGuid()}";
-                var message = new C2DMessage(Encoding.UTF8.GetBytes(messageString));
-                await serviceClient.SendAsync(deviceId, message);
-                Console.WriteLine($"{DateTime.Now} Device:{deviceId} < Sent C2D message to {deviceId}: {messageString}");
+                var index = C2DOperationCounts[deviceId];
+                var identity = $"[Device={deviceId}, Index={index}, Direction=C2D]";
+                LogDebug($"{identity}: Enter C2D loop...");
 
-                var received = await deviceClient.ReceiveAsync(OperationTimeOut);
-                if (received != null)
+                var operationName = "SendC2DMessage";
+                var messagePayload = $"C2D message: {identity}";
+                var message = new C2DMessage(Encoding.UTF8.GetBytes(messagePayload));
+                try
                 {
-                    Console.WriteLine($"{DateTime.Now} Device:{deviceId} < Received C2D message from cloud: {Encoding.UTF8.GetString(received.GetBytes())}");
-                    try
+                    await serviceClient.SendAsync(deviceId, message);
+                    LogDebug($"{identity}: Sent C2D message successfully.");
+
+                    operationName = "ReceiveC2DMessage";
+                    var received = await deviceClient.ReceiveAsync(OperationTimeOut);
+                    while (received != null)
                     {
-                        await deviceClient.CompleteAsync(received);
+                        var content = Encoding.UTF8.GetString(received.GetBytes());
+                        LogDebug($"{identity}: Received C2D message successfully.");
+                        try
+                        {
+                            await deviceClient.CompleteAsync(received);
+                        }
+                        catch (Exception e)
+                        {
+                            // swallow CompleteAsync failure 
+                            LogInfo($"{identity}: Complete C2D message failed: {e}.");
+                        }
+
+                        if (content == messagePayload)
+                        {
+                            // quit loop when message is received
+                            break;
+                        }
                     }
-                    catch (Exception e)
+
+                    if (message == null)
                     {
-                        Console.WriteLine($"{DateTime.Now} Device:{deviceId} < Complete C2D message failed: {e}");
+                        LogInfo($"{identity}: Receive C2D message failed: not received.");
+                    }
+                    else
+                    {
+                        LogDebug($"{identity}: Receive C2D message successfully.");
+                    }
+
+                    operationName = "InvokeDeviceMethod";
+                    var methodPayload = new TwinCollection();
+                    methodPayload["Operation"] = $"Operation: {identity}";
+                    methodPayload["Args"] = $"Args: {identity}";
+                    var methodRequest = new CloudToDeviceMethod(MethodName);
+                    methodRequest.SetPayloadJson(methodPayload.ToJson());
+                    var methodResponse = await serviceClient.InvokeDeviceMethodAsync(deviceId, methodRequest);
+                    var status = methodResponse.Status;
+                    LogDebug($"{identity}: Invoke method response: status={status}, payload={methodResponse.GetPayloadAsJson()}.");
+                    if (status != 200)
+                    {
+                        LogInfo($"{identity}: Invoke method failed: status={status}, payload={methodResponse.GetPayloadAsJson()}.");
                     }
                 }
+                catch (Exception ex)
+                {
+                    LogInfo($"{identity}: Operation {operationName} failed: {ex}");
+                }
+                finally
+                {
+                    if ((index + 1) % 100 == 0)
+                    {
+                        LogInfo($"{identity}: finished {index + 1} C2D loop.");
+                    }
 
-                var payload = new TwinCollection();
-                payload["Operation"] = $"Random operation: {Guid.NewGuid()}";
-                payload["Args"] = $"Random args: {Guid.NewGuid()}";
-                var payloadString = payload.ToJson();
-                var methodRequest = new CloudToDeviceMethod(MethodName);
-                methodRequest.SetPayloadJson(payloadString);
-                var methodResponse = await serviceClient.InvokeDeviceMethodAsync(deviceId, methodRequest);
-                Console.WriteLine($"{DateTime.Now} Device:{deviceId} < Invoke method {payloadString} to {deviceId} response: status={methodResponse.Status}, payload={methodResponse.GetPayloadAsJson()}.");
-             
-                await Task.Delay(TestFrequency);
+                    C2DOperationCounts[deviceId] = index + 1;
+                    LogDebug($"{identity}: Exit C2D loop.");
+                    await Task.Delay(TestFrequency);
+                }
             }
+        }
+
+        private static void LogDebug(string log)
+        {
+            if (DebugLogOn)
+            {
+                LogInfo(log);
+            }
+        }
+
+        private static void LogInfo(string log)
+        {
+            Console.WriteLine($"{DateTime.Now} - {log}");
         }
 
         private async Task<List<Device>> RetrieveDevicesAsync()
@@ -192,16 +294,16 @@ namespace WeatherStation_Console
                 var existing = await registryManager.GetDeviceAsync(deviceId);
                 if (existing != null)
                 {
-                    Console.WriteLine($"Retrieving device: [id={deviceId}, isEdge={existing.Capabilities?.IotEdge}, scope={existing.Scope}]");
+                    LogInfo($"Retrieved device: [id={deviceId}, isEdge={existing.Capabilities?.IotEdge}, scope={existing.Scope}]");
                     return existing;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error retrieving device {deviceId}:{ex}");
+                LogInfo($"Error retrieving device {deviceId}:{ex}");
             }
 
-            Console.WriteLine($"Creating device {deviceId}...");
+            LogInfo($"Creating device {deviceId}...");
             var creating = new Device(deviceId);
             if (scope != null)
             {
@@ -217,7 +319,7 @@ namespace WeatherStation_Console
             }
 
             var created = await registryManager.AddDeviceAsync(creating);
-            Console.WriteLine($"Created device: [id={deviceId}, isEdge={created.Capabilities?.IotEdge}, scope={created.Scope}]");
+            LogInfo($"Created device: [id={deviceId}, isEdge={created.Capabilities?.IotEdge}, scope={created.Scope}]");
             return created;
         }
 
@@ -236,7 +338,7 @@ namespace WeatherStation_Console
 
             protected override Task<string> SafeCreateNewToken(string iotHub, int suggestedTimeToLive)
             {
-                Console.WriteLine($"Creating token for {deviceId} with TTL {suggestedTimeToLive}s.");
+                LogDebug($"Creating token for {deviceId} with TTL {suggestedTimeToLive}s.");
                 var builder = new SharedAccessSignatureBuilder()
                 {
                     Key = sharedAccessKey,
