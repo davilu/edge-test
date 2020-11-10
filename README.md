@@ -27,3 +27,5 @@ docker push [YOUR_CONTAINER_URL]/edgetestappl4
 * You need multi-images for different layers, just run the script multi-times with different name and make sure leaf device prefixes are different.
 * Suggest image name: edge-test-app-l4, edge-test-app-l35 and edge-test-app-l3
 * Suggest leaf device prefixes: edge-test-leaf-l4, edge-test-leaf-l35, edge-test-leaf-l3
+
+## Go to your hub and add module with the image created and you can see it will run on your VM.
