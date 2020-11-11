@@ -32,6 +32,7 @@ docker push [YOUR_CONTAINER_URL]/edgetestappl4
 * Suggest leaf device prefixes: edge-test-leaf-l4, edge-test-leaf-l35, edge-test-leaf-l3
 * Extral publish and subscrition topics only works with native MQTT broker on. Multi topics supported with `;` separated. It could be used for testing MQTT broker with right policy and route setup. You could even test publishing message to upper layer. 
 * C2D, method and twin are subscribed even with native MQTT broker.
-* Default debug log and native mqtt client is off
+* If edge hub host is set, native broker will connect to edge hub; otherwise to iot hub instead.
+* Default debug log and native mqtt client is off.
 
 ## Go to your hub and add module with the image created and you can see it will run on your VM.
