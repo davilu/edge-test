@@ -55,11 +55,21 @@ namespace Microsoft.Azure.Edge.Test
             mqttClient.RegisterConnectionStatusListener(this);
             mqttClient.RegisterMessageHandler(this);
 
+            while(!mqttClient.IsConnected())
+            { 
+                try
+                {
+                    var username = $"{host}/{WebUtility.UrlEncode(deviceId)}/?api-version=2018-06-30";
+                    var password = DeviceManager.CreateDeviceSasToken(host, deviceId, device.Authentication.SymmetricKey.PrimaryKey, Convert.ToInt32(TokenTTL.TotalSeconds));
+                    await mqttClient.ConnectAsync(deviceId, username, password, new CancellationTokenSource(OperationTimeOut).Token);
+                }
+                catch(Exception ex)
+                {
+                    ConsoleLogger.LogInfo($"Connect device {deviceId} to {host} with native MQTT client failed, retry after 1 second: {ex}");
+                    await Task.Delay(TimeSpan.FromSeconds(1));
+                }
+            }
 
-            var username = $"{host}/{WebUtility.UrlEncode(deviceId)}/?api-version=2018-06-30";
-            var password = DeviceManager.CreateDeviceSasToken(host, deviceId, device.Authentication.SymmetricKey.PrimaryKey, Convert.ToInt32(TokenTTL.TotalSeconds));
-            
-            await mqttClient.ConnectAsync(deviceId, username, password, new CancellationTokenSource(OperationTimeOut).Token);
             var subscriptions = new Dictionary<string, Qos>()
             {
                 [$"{c2dMessagesTopic}/#"] = Qos.AtLeastOnce,
@@ -75,8 +85,8 @@ namespace Microsoft.Azure.Edge.Test
                     subscriptions[topic] = Qos.AtLeastOnce;
                 }
             }
-            
             await mqttClient.SubscribeAsync(subscriptions, new CancellationTokenSource(OperationTimeOut).Token);
+
             await Task.WhenAll(D2CLoop(deviceId, cancellationTokenSource.Token), C2DLoop(deviceId, cancellationTokenSource.Token));
             await mqttClient.DisconnectAsync(new CancellationTokenSource(OperationTimeOut).Token);
         }
